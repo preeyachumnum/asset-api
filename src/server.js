@@ -1,7 +1,11 @@
 require("dotenv").config();
 const express = require("express");
 
-const { assetsList, assetsNoImage, assetDetail } = require("./services/assets.service");
+const {
+  assetsList,
+  assetsNoImage,
+  assetDetail,
+} = require("./services/assets.service");
 const {
   loginBegin,
   loginCreateSession,
@@ -10,6 +14,9 @@ const {
   switchPlant,
   requireSession,
 } = require("./services/auth.service");
+
+const { importSapFiles } = require("./services/sapImport.service");
+const { startSapImportJob } = require("./jobs/sapImport.job");
 
 const app = express();
 app.use(express.json());
@@ -152,5 +159,23 @@ app.get("/assets/:assetId", authGuard, async (req, res) => {
   }
 });
 
+/* =========================
+   SAP IMPORT (ทดสอบแบบกดเอง)
+========================= */
+
+// กด import ตอนนี้ (อ่านไฟล์จากโฟลเดอร์ตาม ENV แล้วเรียก SP)
+app.post("/sap/import-now", authGuard, async (req, res) => {
+  try {
+    const r = await importSapFiles();
+    res.json({ ok: true, ...r });
+  } catch (e) {
+    res.status(400).json({ ok: false, message: e.message });
+  }
+});
+
 const port = Number(process.env.PORT || 3001);
-app.listen(port, () => console.log(`API running on http://localhost:${port}`));
+app.listen(port, () => {
+  console.log(`API running on http://localhost:${port}`);
+  // เริ่ม job import ตามเวลาที่ตั้งไว้ใน ENV
+  startSapImportJob();
+});

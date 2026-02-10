@@ -6,17 +6,26 @@ function getConfig() {
   const portValue = process.env.DB_PORT
     ? Number.parseInt(process.env.DB_PORT, 10)
     : undefined;
+  const hasPort = Number.isFinite(portValue);
+  const instanceName = String(process.env.DB_INSTANCE || "").trim();
+
+  const options = {
+    encrypt: process.env.DB_ENCRYPT === "true",
+    trustServerCertificate: process.env.DB_TRUST_SERVER_CERT === "true",
+  };
+
+  // If DB_PORT is set, prefer direct TCP and skip instance discovery.
+  if (!hasPort && instanceName) {
+    options.instanceName = instanceName;
+  }
+
   return {
     server: process.env.DB_SERVER,
     database: process.env.DB_DATABASE,
     user: process.env.DB_USER,
     password: process.env.DB_PASSWORD,
-    port: Number.isFinite(portValue) ? portValue : undefined,
-    options: {
-      encrypt: process.env.DB_ENCRYPT === "true",
-      trustServerCertificate: process.env.DB_TRUST_SERVER_CERT === "true",
-      instanceName: process.env.DB_INSTANCE || undefined,
-    },
+    port: hasPort ? portValue : undefined,
+    options,
     pool: { max: 10, min: 0, idleTimeoutMillis: 30000 },
     requestTimeout: 60000,
   };

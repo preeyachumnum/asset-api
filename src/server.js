@@ -142,8 +142,12 @@ app.post("/auth/logout", authGuard, async (req, res) => {
 
 app.get("/assets", authGuard, async (req, res) => {
   try {
-    const rows = await assetsList();
-    res.json({ ok: true, rows });
+    const data = await assetsList({
+      page: req.query.page,
+      pageSize: req.query.pageSize,
+      search: req.query.search,
+    });
+    res.json({ ok: true, ...data });
   } catch (e) {
     res.status(400).json({ ok: false, message: e.message });
   }
@@ -151,8 +155,12 @@ app.get("/assets", authGuard, async (req, res) => {
 
 app.get("/assets/no-image", authGuard, async (req, res) => {
   try {
-    const rows = await assetsNoImage();
-    res.json({ ok: true, rows });
+    const data = await assetsNoImage({
+      page: req.query.page,
+      pageSize: req.query.pageSize,
+      search: req.query.search,
+    });
+    res.json({ ok: true, ...data });
   } catch (e) {
     res.status(400).json({ ok: false, message: e.message });
   }
@@ -160,11 +168,12 @@ app.get("/assets/no-image", authGuard, async (req, res) => {
 
 app.get("/assets/sap-mismatch", authGuard, async (req, res) => {
   try {
-    const rows = await assetsSapMismatch({
-      limit: req.query.limit,
+    const data = await assetsSapMismatch({
+      page: req.query.page,
+      pageSize: req.query.pageSize,
       search: req.query.search,
     });
-    res.json({ ok: true, rows });
+    res.json({ ok: true, ...data });
   } catch (e) {
     res.status(400).json({ ok: false, message: e.message });
   }

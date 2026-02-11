@@ -1,25 +1,65 @@
 const { execProc, p } = require("../db/execProc");
 
-// เช็ค GUID แบบง่ายๆ กันพังตั้งแต่ต้น
 function isGuid(s) {
   return /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/.test(
     s
   );
 }
 
-// 1) ดึง list ทั้งหมด -> dbo.spAssetsList
-async function assetsList() {
-  const rs = await execProc("dbo.spAssetsList");
-  return rs[0] || [];
+function toPositiveInt(v, def = 1, max = 500) {
+  const n = Number.parseInt(String(v ?? "").trim(), 10);
+  if (!Number.isFinite(n) || n <= 0) return def;
+  return Math.min(n, max);
 }
 
-// 2) ดึง asset ที่ไม่มีรูป -> dbo.spAssetsNoImage
-async function assetsNoImage() {
-  const rs = await execProc("dbo.spAssetsNoImage");
-  return rs[0] || [];
+function toSearch(v) {
+  const s = String(v ?? "").trim();
+  return s ? s : null;
 }
 
-// 3) รายละเอียด 1 ตัว + รูป -> dbo.spAssetDetail(@AssetId)
+function toPagedResult(rs, page, pageSize) {
+  const rows = rs[0] || [];
+  const totalRows = Number((rs[1] && rs[1][0] && rs[1][0].TotalRows) || 0);
+  const safeTotal = Number.isFinite(totalRows) ? totalRows : 0;
+  const totalPages = safeTotal > 0 ? Math.ceil(safeTotal / pageSize) : 0;
+
+  return {
+    rows,
+    paging: {
+      page,
+      pageSize,
+      totalRows: safeTotal,
+      totalPages,
+    },
+  };
+}
+
+async function assetsList({ page = 1, pageSize = 50, search = null } = {}) {
+  const safePage = toPositiveInt(page, 1, 100000);
+  const safePageSize = toPositiveInt(pageSize, 50, 500);
+
+  const rs = await execProc("dbo.spAssetsListPaged", {
+    Page: p.int(safePage),
+    PageSize: p.int(safePageSize),
+    Search: p.nvarchar(100, toSearch(search)),
+  });
+
+  return toPagedResult(rs, safePage, safePageSize);
+}
+
+async function assetsNoImage({ page = 1, pageSize = 50, search = null } = {}) {
+  const safePage = toPositiveInt(page, 1, 100000);
+  const safePageSize = toPositiveInt(pageSize, 50, 500);
+
+  const rs = await execProc("dbo.spAssetsNoImagePaged", {
+    Page: p.int(safePage),
+    PageSize: p.int(safePageSize),
+    Search: p.nvarchar(100, toSearch(search)),
+  });
+
+  return toPagedResult(rs, safePage, safePageSize);
+}
+
 async function assetDetail(assetId) {
   if (!isGuid(assetId)) throw new Error("assetId must be GUID");
 
@@ -33,19 +73,17 @@ async function assetDetail(assetId) {
   };
 }
 
-function toPositiveInt(v, def = 1000, max = 20000) {
-  const n = Number.parseInt(String(v ?? "").trim(), 10);
-  if (!Number.isFinite(n) || n <= 0) return def;
-  return Math.min(n, max);
-}
+async function assetsSapMismatch({ page = 1, pageSize = 50, search = null } = {}) {
+  const safePage = toPositiveInt(page, 1, 100000);
+  const safePageSize = toPositiveInt(pageSize, 50, 500);
 
-// 4) รายการปัญหาข้อมูล SAP ไม่ตรงกับระบบ -> dbo.spAssetsSapMismatch
-async function assetsSapMismatch({ limit = 1000, search = null } = {}) {
-  const rs = await execProc("dbo.spAssetsSapMismatch", {
-    TopRows: p.int(toPositiveInt(limit, 1000, 20000)),
-    Search: p.nvarchar(100, search ? String(search).trim() : null),
+  const rs = await execProc("dbo.spAssetsSapMismatchPaged", {
+    Page: p.int(safePage),
+    PageSize: p.int(safePageSize),
+    Search: p.nvarchar(100, toSearch(search)),
   });
-  return rs[0] || [];
+
+  return toPagedResult(rs, safePage, safePageSize);
 }
 
 module.exports = { assetsList, assetsNoImage, assetDetail, assetsSapMismatch };

@@ -1,10 +1,12 @@
 require("dotenv").config();
 const express = require("express");
+const cors = require("cors");
 
 const {
   assetsList,
   assetsNoImage,
   assetDetail,
+  assetsSapMismatch,
 } = require("./services/assets.service");
 const {
   loginBegin,
@@ -19,6 +21,12 @@ const { importSapFiles } = require("./services/sapImport.service");
 const { startSapImportJob } = require("./jobs/sapImport.job");
 
 const app = express();
+app.use(
+  cors({
+    origin: true,
+    credentials: true,
+  })
+);
 app.use(express.json());
 
 // ดึง sessionId จาก header: x-session-id หรือ Authorization: Bearer <id>
@@ -144,6 +152,18 @@ app.get("/assets", authGuard, async (req, res) => {
 app.get("/assets/no-image", authGuard, async (req, res) => {
   try {
     const rows = await assetsNoImage();
+    res.json({ ok: true, rows });
+  } catch (e) {
+    res.status(400).json({ ok: false, message: e.message });
+  }
+});
+
+app.get("/assets/sap-mismatch", authGuard, async (req, res) => {
+  try {
+    const rows = await assetsSapMismatch({
+      limit: req.query.limit,
+      search: req.query.search,
+    });
     res.json({ ok: true, rows });
   } catch (e) {
     res.status(400).json({ ok: false, message: e.message });

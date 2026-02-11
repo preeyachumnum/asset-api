@@ -33,4 +33,19 @@ async function assetDetail(assetId) {
   };
 }
 
-module.exports = { assetsList, assetsNoImage, assetDetail };
+function toPositiveInt(v, def = 1000, max = 20000) {
+  const n = Number.parseInt(String(v ?? "").trim(), 10);
+  if (!Number.isFinite(n) || n <= 0) return def;
+  return Math.min(n, max);
+}
+
+// 4) รายการปัญหาข้อมูล SAP ไม่ตรงกับระบบ -> dbo.spAssetsSapMismatch
+async function assetsSapMismatch({ limit = 1000, search = null } = {}) {
+  const rs = await execProc("dbo.spAssetsSapMismatch", {
+    TopRows: p.int(toPositiveInt(limit, 1000, 20000)),
+    Search: p.nvarchar(100, search ? String(search).trim() : null),
+  });
+  return rs[0] || [];
+}
+
+module.exports = { assetsList, assetsNoImage, assetDetail, assetsSapMismatch };

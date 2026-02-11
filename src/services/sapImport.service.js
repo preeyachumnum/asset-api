@@ -20,7 +20,7 @@ function toPositiveInt(v, def) {
 async function readAndParseSapCsv(fullPath) {
   const text = await fs.readFile(fullPath, "utf8");
 
-  // ไฟล์ SAP คั่นด้วย | และมีข้อความแบบ 10" 8" จึงปิด quote ไปเลย
+  // SAP CSV uses "|" and may contain text like 10" 8", so quote must be disabled.
   const rows = parse(text, {
     delimiter: "|",
     columns: true,
@@ -81,7 +81,25 @@ async function purgeSapStaging({ retainDays = 3, batchSize = 50000 } = {}) {
   }
 }
 
-// อ่านไฟล์ SAP -> แปลงเป็น JSON -> ส่งให้ SP อัปเดตลง DB
+async function syncSapCurrentToAssets() {
+  const rs = await execProc("dbo.spSapAsset_SyncToAssets", {
+    DeactivateMissing: p.bit(0),
+  });
+
+  const row = (rs[0] && rs[0][0]) || {};
+  return {
+    ok: true,
+    sourceActiveRows: Number(row.SourceActiveRows ?? row.sourceActiveRows ?? 0),
+    insertedAssets: Number(row.InsertedAssets ?? row.insertedAssets ?? 0),
+    updatedAssets: Number(row.UpdatedAssets ?? row.updatedAssets ?? 0),
+    deactivatedAssets: Number(
+      row.DeactivatedAssets ?? row.deactivatedAssets ?? 0
+    ),
+    activeAssetsTotal: Number(row.ActiveAssetsTotal ?? row.activeAssetsTotal ?? 0),
+  };
+}
+
+// Read SAP files -> parse CSV -> pass JSON to SP.
 async function importSapFiles() {
   const dropDir = String(process.env.SAP_DROP_DIR || "").trim();
   if (!dropDir) throw new Error("Missing SAP_DROP_DIR");
@@ -103,12 +121,31 @@ async function importSapFiles() {
         Json: p.ntext(json),
       });
 
-      const batchId = (rs[0] && rs[0][0] && (rs[0][0].ImportBatchId || rs[0][0].importBatchId)) || null;
+      const batchId =
+        (rs[0] &&
+          rs[0][0] &&
+          (rs[0][0].ImportBatchId || rs[0][0].importBatchId)) ||
+        null;
 
-      results.push({ ok: true, file: fileName, rows: rows.length, importBatchId: batchId });
+      results.push({
+        ok: true,
+        file: fileName,
+        rows: rows.length,
+        importBatchId: batchId,
+      });
     } catch (e) {
       results.push({ ok: false, file: fileName, message: e.message || String(e) });
     }
+  }
+
+  let assetsSync = {
+    ok: false,
+    skipped: true,
+    message: "No successful SAP import file in this run",
+  };
+
+  if (results.some((x) => x.ok)) {
+    assetsSync = await syncSapCurrentToAssets();
   }
 
   const stagingPurge = await purgeSapStaging({
@@ -116,7 +153,7 @@ async function importSapFiles() {
     batchSize: process.env.SAP_STAGING_PURGE_BATCH_SIZE || 50000,
   });
 
-  return { results, stagingPurge };
+  return { results, assetsSync, stagingPurge };
 }
 
 module.exports = { importSapFiles };

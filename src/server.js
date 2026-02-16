@@ -1,12 +1,14 @@
 require("dotenv").config();
 const express = require("express");
 const cors = require("cors");
+const multer = require("multer");
 
 const {
   assetsList,
   assetsNoImage,
   assetDetail,
   assetsSapMismatch,
+  assetAddImage,
 } = require("./services/assets.service");
 const {
   loginBegin,
@@ -19,6 +21,7 @@ const {
 
 const { importSapFiles } = require("./services/sapImport.service");
 const { startSapImportJob } = require("./jobs/sapImport.job");
+const { saveAssetImage, getImageStaticMount } = require("./services/storage/imageStorage.service");
 
 const app = express();
 app.use(
@@ -28,6 +31,21 @@ app.use(
   })
 );
 app.use(express.json());
+
+const imageUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: {
+    fileSize: Number(process.env.ASSET_IMAGE_MAX_BYTES || 10 * 1024 * 1024),
+  },
+});
+
+const staticMount = getImageStaticMount();
+if (staticMount && staticMount.routePath && staticMount.dirPath) {
+  app.use(staticMount.routePath, express.static(staticMount.dirPath));
+  console.log(
+    `Image static mount: ${staticMount.routePath} -> ${staticMount.dirPath}`
+  );
+}
 
 // ดึง sessionId จาก header: x-session-id หรือ Authorization: Bearer <id>
 function getSessionId(req) {
@@ -188,6 +206,55 @@ app.get("/assets/:assetId", authGuard, async (req, res) => {
   }
 });
 
+app.post(
+  "/assets/:assetId/images",
+  authGuard,
+  imageUpload.single("image"),
+  async (req, res) => {
+    try {
+      const assetId = String(req.params.assetId || "").trim();
+      if (!req.file || !req.file.buffer || !req.file.buffer.length) {
+        return res.status(400).json({ ok: false, message: "Missing image file" });
+      }
+
+      const isPrimary =
+        String(req.body?.isPrimary || "").trim().toLowerCase() === "1" ||
+        String(req.body?.isPrimary || "").trim().toLowerCase() === "true";
+
+      const saved = await saveAssetImage({
+        assetId,
+        originalName: req.file.originalname,
+        mimeType: req.file.mimetype,
+        buffer: req.file.buffer,
+      });
+
+      try {
+        const image = await assetAddImage({
+          assetId,
+          fileUrl: saved.fileUrl,
+          isPrimary,
+        });
+
+        return res.json({
+          ok: true,
+          image,
+          file: {
+            provider: saved.provider || "local",
+            fileUrl: saved.fileUrl,
+          },
+        });
+      } catch (dbErr) {
+        if (saved && typeof saved.cleanup === "function") {
+          await saved.cleanup();
+        }
+        throw dbErr;
+      }
+    } catch (e) {
+      return res.status(400).json({ ok: false, message: e.message });
+    }
+  }
+);
+
 /* =========================
    SAP IMPORT (ทดสอบแบบกดเอง)
 ========================= */
@@ -196,6 +263,14 @@ app.get("/assets/:assetId", authGuard, async (req, res) => {
 app.post("/sap/import-now", authGuard, async (req, res) => {
   try {
     const r = await importSapFiles();
+    const successCount = Number(r?.summary?.successCount || 0);
+    if (successCount <= 0) {
+      return res.status(400).json({
+        ok: false,
+        message: "SAP import failed for all configured files",
+        ...r,
+      });
+    }
     res.json({ ok: true, ...r });
   } catch (e) {
     res.status(400).json({ ok: false, message: e.message });

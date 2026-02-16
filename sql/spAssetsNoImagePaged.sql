@@ -19,9 +19,40 @@ BEGIN
 
   ;WITH base_data AS (
     SELECT
-      a.*,
+      a.AssetId,
+      a.CompanyId,
+      a.PlantId,
+      a.CostCenterId,
+      a.LocationId,
+      a.AssetGroupId,
+      a.AssetStatusId,
+      a.AssetNo,
+      a.AssetName,
+      a.BookValue,
+      a.ReceiveDate,
+      a.QrValue,
+      a.QrTypeCode,
+      a.IsActive,
+      a.CreatedAt,
+      a.UpdatedAt,
+      c.CompanyCode,
+      c.CompanyName,
+      p.PlantCode,
+      p.PlantName,
+      cc.CostCenterCode,
+      cc.CostCenterName,
+      l.LocationCode,
+      l.LocationName,
+      st.StatusCode,
+      st.StatusName,
+      CAST(0 AS BIT) AS HasImage,
       ROW_NUMBER() OVER (ORDER BY a.AssetNo ASC, a.AssetId ASC) AS RowNum
     FROM dbo.Assets a
+    LEFT JOIN dbo.Companies c ON c.CompanyId = a.CompanyId
+    LEFT JOIN dbo.Plants p ON p.PlantId = a.PlantId
+    LEFT JOIN dbo.CostCenters cc ON cc.CostCenterId = a.CostCenterId
+    LEFT JOIN dbo.Locations l ON l.LocationId = a.LocationId
+    LEFT JOIN dbo.AssetStatuses st ON st.AssetStatusId = a.AssetStatusId
     LEFT JOIN dbo.AssetImages i
       ON i.AssetId = a.AssetId
      AND i.IsActive = 1
@@ -49,7 +80,18 @@ BEGIN
     QrTypeCode,
     IsActive,
     CreatedAt,
-    UpdatedAt
+    UpdatedAt,
+    CompanyCode,
+    CompanyName,
+    PlantCode,
+    PlantName,
+    CostCenterCode,
+    CostCenterName,
+    LocationCode,
+    LocationName,
+    StatusCode,
+    StatusName,
+    HasImage
   FROM base_data
   WHERE RowNum BETWEEN ((@Page - 1) * @PageSize) + 1 AND (@Page * @PageSize)
   ORDER BY RowNum;

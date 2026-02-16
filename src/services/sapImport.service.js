@@ -144,7 +144,10 @@ async function importSapFiles() {
     message: "No successful SAP import file in this run",
   };
 
-  if (results.some((x) => x.ok)) {
+  const successCount = results.filter((x) => x && x.ok).length;
+  const failureCount = results.length - successCount;
+
+  if (successCount > 0) {
     assetsSync = await syncSapCurrentToAssets();
   }
 
@@ -153,7 +156,16 @@ async function importSapFiles() {
     batchSize: process.env.SAP_STAGING_PURGE_BATCH_SIZE || 50000,
   });
 
-  return { results, assetsSync, stagingPurge };
+  return {
+    results,
+    summary: {
+      totalFiles: results.length,
+      successCount,
+      failureCount,
+    },
+    assetsSync,
+    stagingPurge,
+  };
 }
 
 module.exports = { importSapFiles };

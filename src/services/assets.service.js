@@ -86,4 +86,24 @@ async function assetsSapMismatch({ page = 1, pageSize = 50, search = null } = {}
   return toPagedResult(rs, safePage, safePageSize);
 }
 
-module.exports = { assetsList, assetsNoImage, assetDetail, assetsSapMismatch };
+async function assetAddImage({ assetId, fileUrl, isPrimary = false } = {}) {
+  if (!isGuid(String(assetId || ""))) throw new Error("assetId must be GUID");
+  const safeFileUrl = String(fileUrl || "").trim();
+  if (!safeFileUrl) throw new Error("fileUrl is required");
+
+  const rs = await execProc("dbo.spAssetImageAdd", {
+    AssetId: p.uuid(assetId),
+    FileUrl: p.nvarchar(1000, safeFileUrl),
+    IsPrimary: p.bit(Boolean(isPrimary)),
+  });
+
+  return (rs[0] && rs[0][0]) || null;
+}
+
+module.exports = {
+  assetsList,
+  assetsNoImage,
+  assetDetail,
+  assetsSapMismatch,
+  assetAddImage,
+};

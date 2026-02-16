@@ -48,6 +48,11 @@ async function callApiWithRetry(baseUrl, method, path, options = {}, retries = 5
       await sleep(500);
     }
   }
+  if (lastErr && String(lastErr.message || "").includes("fetch failed")) {
+    throw new Error(
+      `Request failed: cannot reach ${baseUrl}. Start API first with \"npm run dev\"`
+    );
+  }
   throw lastErr || new Error("Request failed");
 }
 
@@ -93,6 +98,9 @@ async function main() {
     const results = Array.isArray(imp.data.results) ? imp.data.results : [];
     const okCount = results.filter((x) => x && x.ok).length;
     const failCount = results.length - okCount;
+    if (okCount <= 0) {
+      throw new Error(`import-now finished with 0 success files: ${JSON.stringify(imp.data)}`);
+    }
     console.log("smoke: import done", { files: results.length, okCount, failCount });
   } finally {
     if (sessionId) {

@@ -18,6 +18,20 @@ const {
   switchPlant,
   requireSession,
 } = require("./services/auth.service");
+const {
+  toYear,
+  stocktakeGetOrCreate,
+  stocktakeGetConfig,
+  stocktakeReportSummary,
+  stocktakeReportDetail,
+  stocktakeReportExport3Tabs,
+  stocktakeScan,
+  stocktakeAddImage,
+  stocktakeImportCountJson,
+  stocktakeCloseYear,
+  stocktakeOpenNextYearWithCarryPending,
+  parseStocktakeImportFile,
+} = require("./services/stocktake.service");
 
 const { importSapFiles } = require("./services/sapImport.service");
 const { startSapImportJob } = require("./jobs/sapImport.job");
@@ -36,6 +50,12 @@ const imageUpload = multer({
   storage: multer.memoryStorage(),
   limits: {
     fileSize: Number(process.env.ASSET_IMAGE_MAX_BYTES || 10 * 1024 * 1024),
+  },
+});
+const importUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: {
+    fileSize: Number(process.env.STOCKTAKE_IMPORT_MAX_BYTES || 20 * 1024 * 1024),
   },
 });
 
@@ -75,6 +95,16 @@ async function authGuard(req, res, next) {
   } catch (e) {
     return res.status(401).json({ ok: false, message: e.message || "Unauthorized" });
   }
+}
+
+function getSessionContext(req) {
+  const session = req.session || {};
+  const userId = session.UserId || session.userId || null;
+  const plantId = session.PlantId || session.plantId || null;
+  if (!userId || !plantId) {
+    throw new Error("Invalid session context");
+  }
+  return { userId, plantId };
 }
 
 /* =========================
@@ -260,6 +290,220 @@ app.post(
 ========================= */
 
 // กด import ตอนนี้ (อ่านไฟล์จากโฟลเดอร์ตาม ENV แล้วเรียก SP)
+/* =========================
+   STOCKTAKE (MODULE 2)
+========================= */
+
+app.get("/stocktake/workspace", authGuard, async (req, res) => {
+  try {
+    const { userId, plantId } = getSessionContext(req);
+    const stocktakeYear = toYear(req.query.year);
+    const statusCode = String(req.query.statusCode || "").trim() || null;
+    const search = String(req.query.search || "").trim() || null;
+
+    const stocktakeId = await stocktakeGetOrCreate({
+      plantId,
+      stocktakeYear,
+      userId,
+    });
+
+    const [summaryRs, detailRs, exportRs, config] = await Promise.all([
+      stocktakeReportSummary({ plantId, stocktakeYear }),
+      stocktakeReportDetail({ plantId, stocktakeYear, statusCode, search }),
+      stocktakeReportExport3Tabs({ plantId, stocktakeYear, search }),
+      stocktakeGetConfig({ plantId, stocktakeYear }),
+    ]);
+
+    const summary = summaryRs[0] || [];
+    const details = detailRs[0] || [];
+    const pendingItems = (exportRs[2] || []).map((x) => ({
+      AssetNo: x.AssetNo,
+      AssetName: x.AssetName,
+      BookValue: x.BookValue,
+      NoteText: x.NoteText,
+      CountedAt: x.CountedAt,
+    }));
+
+    return res.json({
+      ok: true,
+      data: {
+        stocktakeId,
+        plantId,
+        stocktakeYear,
+        config: config
+          ? {
+              stocktakeYearConfigId: config.StocktakeYearConfigId,
+              isOpen: Boolean(config.IsOpen),
+              reportGeneratedAt: config.ReportGeneratedAt || null,
+              closedAt: config.ClosedAt || null,
+              closedByUserId: config.ClosedByUserId || null,
+            }
+          : null,
+        summary,
+        details,
+        pendingItems,
+      },
+    });
+  } catch (e) {
+    return res.status(400).json({ ok: false, message: e.message });
+  }
+});
+
+app.post("/stocktake/scan", authGuard, imageUpload.single("image"), async (req, res) => {
+  try {
+    const { userId, plantId } = getSessionContext(req);
+    const stocktakeYear = toYear(req.body?.year);
+    const assetId = String(req.body?.assetId || "").trim();
+    const statusCode = String(req.body?.statusCode || "").trim();
+    const countMethod = String(req.body?.countMethod || "").trim() || "QR";
+    const noteText = String(req.body?.noteText || "").trim() || null;
+
+    if (!assetId) return res.status(400).json({ ok: false, message: "assetId is required" });
+    if (!statusCode) return res.status(400).json({ ok: false, message: "statusCode is required" });
+    if (!req.file || !req.file.buffer || !req.file.buffer.length) {
+      return res.status(400).json({ ok: false, message: "Image file is required for stocktake scan" });
+    }
+
+    const stocktakeId = await stocktakeGetOrCreate({
+      plantId,
+      stocktakeYear,
+      userId,
+    });
+
+    const saved = await saveAssetImage({
+      assetId,
+      originalName: req.file.originalname,
+      mimeType: req.file.mimetype,
+      buffer: req.file.buffer,
+    });
+
+    try {
+      const stocktakeItemId = await stocktakeScan({
+        stocktakeId,
+        assetId,
+        statusCode,
+        countedByUserId: userId,
+        countMethod,
+        noteText,
+      });
+
+      const stocktakeItemImageId = await stocktakeAddImage({
+        stocktakeItemId,
+        fileUrl: saved.fileUrl,
+      });
+
+      return res.json({
+        ok: true,
+        data: {
+          stocktakeId,
+          stocktakeItemId,
+          stocktakeItemImageId,
+          fileUrl: saved.fileUrl,
+        },
+      });
+    } catch (dbErr) {
+      if (saved && typeof saved.cleanup === "function") {
+        await saved.cleanup();
+      }
+      throw dbErr;
+    }
+  } catch (e) {
+    return res.status(400).json({ ok: false, message: e.message });
+  }
+});
+
+app.post("/stocktake/import", authGuard, importUpload.single("file"), async (req, res) => {
+  try {
+    const { userId, plantId } = getSessionContext(req);
+    const stocktakeYear = toYear(req.body?.year);
+    const overrideMethod = String(req.body?.countMethod || "")
+      .trim()
+      .toUpperCase();
+
+    if (!req.file || !req.file.buffer || !req.file.buffer.length) {
+      return res.status(400).json({ ok: false, message: "Import file is required" });
+    }
+
+    const rows = parseStocktakeImportFile({
+      originalName: req.file.originalname,
+      buffer: req.file.buffer,
+    });
+
+    if (!rows.length) {
+      return res.status(400).json({ ok: false, message: "No valid rows found in import file" });
+    }
+
+    const items = overrideMethod
+      ? rows.map((x) => ({ ...x, CountMethod: overrideMethod }))
+      : rows;
+
+    const stocktakeId = await stocktakeGetOrCreate({
+      plantId,
+      stocktakeYear,
+      userId,
+    });
+
+    const imported = await stocktakeImportCountJson({
+      stocktakeId,
+      importedByUserId: userId,
+      items,
+    });
+
+    return res.json({
+      ok: true,
+      data: {
+        stocktakeId,
+        parsedRows: items.length,
+        importedRows: Number(imported?.ImportedRows || 0),
+      },
+    });
+  } catch (e) {
+    return res.status(400).json({ ok: false, message: e.message });
+  }
+});
+
+app.post("/stocktake/close-year", authGuard, async (req, res) => {
+  try {
+    const { userId, plantId } = getSessionContext(req);
+    const stocktakeYear = toYear(req.body?.year);
+
+    await stocktakeCloseYear({
+      plantId,
+      stocktakeYear,
+      closedByUserId: userId,
+    });
+
+    return res.json({
+      ok: true,
+      data: {
+        plantId,
+        stocktakeYear,
+      },
+    });
+  } catch (e) {
+    return res.status(400).json({ ok: false, message: e.message });
+  }
+});
+
+app.post("/stocktake/open-next-year", authGuard, async (req, res) => {
+  try {
+    const { userId, plantId } = getSessionContext(req);
+    const fromYear = toYear(req.body?.fromYear || req.body?.year);
+    const toYearValue = req.body?.toYear ? toYear(req.body?.toYear) : fromYear + 1;
+
+    const r = await stocktakeOpenNextYearWithCarryPending({
+      plantId,
+      fromYear,
+      toYear: toYearValue,
+      createdByUserId: userId,
+    });
+
+    return res.json({ ok: true, data: r });
+  } catch (e) {
+    return res.status(400).json({ ok: false, message: e.message });
+  }
+});
+
 app.post("/sap/import-now", authGuard, async (req, res) => {
   try {
     const r = await importSapFiles();
